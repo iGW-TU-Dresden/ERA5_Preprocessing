@@ -1,0 +1,435 @@
+# ERA5 Project: Download and Data Preprocessing
+
+The **ERA5 Project** is the fifth generation ECMWF reanalysis for the global climate and weather available from 1940 onwards. ERA5 provides hourly estimates for a large number of atmospheric, ocean-wave and land-surface quantities. Data has been regridded to a regular lat-lon grid of 0.25 degrees for the reanalysis and 0.5 degrees for the uncertainty estimate (0.5 and 1 degree respectively for ocean waves).
+
+More information: <https://cds.climate.copernicus.eu/cdsapp#!/dataset/reanalysis-era5-single-levels?tab=overview>
+
+Try executing the chunks by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*.
+
+### Install or activate the required libraries
+
+```{r}
+#install.packages(c("utils", "ecmwfr", "gtools", "ncdf4", "ncdf4.helpers", "reshape2", "tidyverse", "sf"))
+
+library(utils)
+library(ecmwfr)
+library(gtools)
+library(ncdf4)
+library(ncdf4.helpers)
+library(reshape2)
+library(tidyverse)
+library(sf)
+```
+
+## 1. Set paths and directory
+
+In the next step, you can choose the folder where the results will be stored, and either select a shapefile representing the region (polygon) of interest or choose a CSV file containing the coordinates of interest.
+
+```{r}
+# Set the directory for data storage
+user_wd <- readline(prompt = "Please enter your directory path: ")
+user_wd <- gsub('"', '', user_wd); user_wd <- gsub('\\\\','/',user_wd)
+
+while (!dir.exists(user_wd)) {
+  print("Invalid directory. Please enter a valid one.")
+  user_wd <- readline(prompt = "Please enter your directory path: ")
+  user_wd <- gsub('"', '', user_wd); user_wd <- gsub('\\\\','/',user_wd)
+}
+print(paste("You entered a valid directory:", user_wd))
+
+# Create the destination folder if it doesn't exist
+temp_folder <- "temp_ERA5"
+user_wd <- file.path(user_wd, temp_folder)
+user_wd <- gsub("//", "/", user_wd)
+
+if (!dir.exists(user_wd)) {
+  dir.create(user_wd)
+}
+
+# Set the path to a. shapefile or b. CSV file with coordinates 
+user_choice <- readline(prompt = "Please enter 'a' to input the location of your shapefile or 'b' to for CSV with coordinates: ")
+
+if (tolower(user_choice) == "a") {
+  # Read shapefile
+  shp_path <- readline(prompt = "Please enter the path to your shapefile. Example: path/to/your/folder/polygon.shp :")
+  shp_path <- gsub('"', '', shp_path); shp_path <- gsub('\\\\','/',shp_path)
+
+  while (!file.exists(shp_path)) {
+    print("Invalid file path. Please enter a valid one.")
+    shp_path <- readline(prompt = "Please enter the path to your shapefile. Example: path/to/your/folder/polygon.shp :")
+    shp_path <- gsub('"', '', shp_path); shp_path <- gsub('\\\\','/',shp_path)
+  }
+
+  shp <- st_read(shp_path)
+  print(paste("You entered a valid path for the shapefile:", shp_path))
+
+} else if (tolower(user_choice) == "b") {
+  # Read CSV
+  coord_path <- readline(prompt = "Please enter the path to your CSV with coordinates. Format: two columns latitude longitude. Example: path/to/your/folder/coordinates.csv :")
+  coord_path <- gsub('"', '', coord_path); coord_path <- gsub('\\\\','/',coord_path)
+
+  while (!file.exists(coord_path)) {
+    print("Invalid file path. Please enter a valid one.")
+    coord_path <- readline(prompt = "Please enter the path to your CSV with coordinates. Format: two columns latitude longitude. Example: path/to/your/folder/coordinates.csv :")
+    coord_path <- gsub('"', '', coord_path); coord_path <- gsub('\\\\','/',coord_path)
+  }
+
+  coord_df <- read.csv(coord_path)
+  print(paste("You entered a valid path for the CSV file:", coord_path))
+
+} else {
+  cat("Invalid choice. Please enter 'a' or 'b'.\n")
+}
+```
+
+## 2. Enter the variable and time window of your interest
+
+**Available variables from the ERA5 project:**
+
+(1) 2m temperature
+(2) Total precipitation
+
+After running the following chunk, please answer with the abbreviation (1 or 2) of the variable you are interested in.
+
+```{r}
+#Enter the variable you are interested in
+available <- c("1" = "2m_temperature", "2" = "total_precipitation")  
+selection <- NA
+
+while (is.na(selection) || !(selection %in% names(available))) {
+  selection <- readline(prompt = "Enter the variable you are interested in (abbreviation): ")
+
+  if (!(selection %in% names(available))) {
+    print("Invalid variable. Please enter a valid one.")
+  }
+}
+
+variable <- available[[selection]]
+print(paste("Input is valid. Your request will be processed for variable", selection,"."))
+
+#Enter the start and end year you are interested in
+current_year <- as.numeric(format(Sys.Date(), "%Y"))
+current_month <- as.numeric(format(Sys.Date(), "%m"))
+current_day <- as.numeric(format(Sys.Date(), "%d"))
+start_year <- NA
+end_year <- NA
+
+while (is.na(start_year) || is.na(end_year)) {
+
+  start_year <- as.numeric(readline(prompt = "Enter the start year you are interested in: "))
+  
+    if (is.na(start_year) || start_year < 1940) {
+    print("Error: Invalid input. Please enter a valid numeric value starting from 1940.")
+    next  # Restart from the beginning
+  }
+  
+  end_year <- as.numeric(readline(prompt = "Enter the end year you are interested in: "))
+  
+  if (end_year <= start_year || end_year > current_year) {
+    print("Error: End year cannot be smaller than the start year or larger than the current year. Please enter valid years.")
+    end_year <- as.numeric(readline(prompt = "Enter the end year you are interested in: "))
+  }
+}
+
+print(paste0("Input is valid. Your request will be processed from ", start_year, " to ", end_year, ". :)"))
+```
+
+## 3. Enter the latitudes and longitudes of the rectangular area you are interested in
+
+```{r}
+lat_min_user <- as.numeric(readline("Enter the min latitude (+N -S): "))
+lat_max_user <- as.numeric(readline("Enter the max latitude (+N -S): "))
+lon_min_user <- as.numeric(readline("Enter the min longitude (+E -W): "))
+lon_max_user <- as.numeric(readline("Enter the max longitude (+E -W): "))
+```
+
+## 4. Download the dataset of interest
+
+**Connect to the SFTP Server where the GLEAM dataset is located**
+
+The dataset will be downloaded for the assigned variable and years and stored in the pre-determined directory on your local computer.
+
+```{r}
+# Provide your User ID (UID) and Application Program Interface (API) Key details
+# This can found on your ERA5 account profile
+UID <- readline(prompt = "Please enter your User ID: ")
+cds.key <- readline(prompt = "Please enter your API Key: ")
+wf_set_key(user = UID, key = cds.key, service = "cds") # Log-in to the website with your details
+
+# Create folder to store the NetCDF files
+nc_files <- dir.create(file.path(user_wd, "nc_files"))
+nc_files <- file.path(user_wd, "nc_files")
+
+# Request and download
+for (year in start_year:end_year) {
+  end_month <- ifelse(year == current_year, current_month, 12)
+
+  request <- list(
+    dataset_short_name = "reanalysis-era5-single-levels",
+    product_type   = "reanalysis",
+    format = "netcdf",
+    variable = variable,
+    year = as.character(year), 
+    month = sprintf("%02d", 1:end_month), 
+    day = sprintf("%02d", 1:31), 
+    time = c("00:00", "12:00" ),
+    area = c(lat_max_user, lon_min_user, lat_min_user, lon_max_user), # Specified as N, W, S, E
+    target = sprintf("reanalysis_era5_single_levels_%s_%s.nc", variable, year)    
+  )
+  
+  file <- wf_request(user = UID,
+                     request = request,
+                     transfer = TRUE,
+                     path = nc_files,
+                     time_out = 5*3600,
+                     verbose = TRUE)
+}
+```
+
+## 5. Preprocessing of ERA5 NetCDF dataset
+
+If you are interested in preprocessing the data for a shapefile, please run the chunks i and ii from section 5.1. If you are interested in a CSV file, please run section 5.2.
+
+After running the following chunks, the results will be stored in a folder called 'results' within your specified working directory.
+
+### 5.1. Shapefile (polygon)
+
+#### i. Average daily values for the region (polygon) of interest
+
+```{r}
+# Create folder and empty data frame to store output data
+results_shp <- dir.create(file.path(user_wd, "results_shp")) # Results folder
+output_daily <- data.frame() # Empty data frame
+
+# List all NetCDF files in the directory
+nc_files <- list.files(path = file.path(user_wd, "nc_files"), pattern = "\\.nc$", full.names = TRUE)
+
+# Extract the minimum and maximum coordinates of your shapefile
+bbox <- st_bbox(shp)
+lat_min <- min(bbox[2])
+lat_max <- max(bbox[4])
+lon_min <- min(bbox[1])
+lon_max <- max(bbox[3])
+
+# Set your region of interest's latitude and longitude range
+lat_range <- c(lat_min, lat_max)
+lon_range <- c(lon_min, lon_max)
+
+# Iterate through each NetCDF file
+for (i in 1:length(nc_files)) {
+  
+  nc <- nc_open(nc_files[i])
+  
+  nc_var <- names(nc$var)
+  units <- nc[["var"]][[nc_var]][["units"]]
+  
+  # Extract time array with the order of the two daily measurements at 00:00 and 12:00
+  day <- nc[["dim"]][["time"]][["vals"]]
+  time_df <- as.data.frame(day)
+  time_df$day <- as.POSIXct(day * 3600, origin = "1900-01-01 00:00:00", tz = "GMT")
+  time_df$day <- format(as.Date(time_df$day))
+  time_df$time_id <- seq_len(nrow(time_df))
+  
+  # Find the indices of latitudes and longitudes within your region of interest
+  lat <- nc[["dim"]][["latitude"]][["vals"]]
+  lon <- nc[["dim"]][["longitude"]][["vals"]]
+  lat_indices <- which(lat >= lat_range[1] & lat <= lat_range[2])
+  lon_indices <- which(lon >= lon_range[1] & lon <= lon_range[2])
+  
+  if (nc[["ndims"]] == 4) {
+    data_var <- ncvar_get(nc, nc_var, start = c(lon_indices[1], lat_indices[1], 1, 1), 
+                          count = c(length(lon_indices), length(lat_indices), 1, -1))
+  } else {
+    data_var <- ncvar_get(nc, nc_var, start = c(lon_indices[1], lat_indices[1], 1), 
+                          count = c(length(lon_indices), length(lat_indices), -1))
+  }
+  
+  # Reshape the daily variable values into a matrix
+  n_lon <- dim(data_var)[1]
+  n_lat <- dim(data_var)[2]
+  var <- dim(data_var)[3]
+  
+  # Create a matrix and convert it to a data frame
+  matrix_var <- array(data = data_var, dim = c(n_lon, n_lat, var))
+  df_var <- as.data.frame(melt(matrix_var))
+  colnames(df_var) <- c("long", "lat", "time_id", "var")
+  
+  df_var <- merge(df_var, time_df, by = "time_id")
+  
+  # Compute the daily averages over the region of interest 
+  df_var <- (group_by(df_var, day)) %>%
+    summarise(var = mean(var, na.rm = TRUE))
+  
+  output_daily <- rbind(output_daily, df_var) # Join current year with previous result
+  
+  nc_close(nc)
+}
+
+# Rename the columns and days based on the start and end dates
+colnames(output_daily) <- c("Date", paste0(variable," [",units,"]"))
+
+output_daily$Date <- as.character(seq.Date(as.Date(paste(start_year, "-01-01", sep = "")), 
+                                           by = "days", length.out = nrow(output_daily)))
+
+# Export the results as a CSV file
+write.csv(output_daily, file.path(user_wd, "results_shp", "shp_output_daily.csv"), row.names = FALSE)
+
+if (exists("output_daily")) {
+  print("Data extraction from NetCDF files completed.")
+}
+```
+
+#### ii. Average monthly values for the region (polygon) of interest
+
+```{r}
+month_values <- output_daily
+colnames(month_values) <- c("day", "var")
+
+month_values$day <- as.Date(month_values$day, format = "%Y-%m-%d")
+month_values$month <- format(month_values$day, "%m") # Create column with correspondent month
+
+# Monthly average values
+monthly_av <- month_values %>%
+  group_by(year = format(day, "%Y"), month) %>%
+  summarise(var = mean(var, na.rm = TRUE))
+
+# Long-term monthly average values
+long_term_av <- month_values %>%
+  group_by(month) %>%
+  summarise(var = mean(var, na.rm = TRUE))
+
+colnames(monthly_av) <- c("Year", "Month", paste0("Monthly av ",variable," [",units,"]"))
+colnames(long_term_av) <- c("Month", paste0("Long-term monthly av ",variable," [",units,"]"))
+
+write.csv(monthly_av, file.path(user_wd, "results_shp", "shp__monthly_av.csv"), row.names = FALSE)
+write.csv(long_term_av, file.path(user_wd, "results_shp", "shp_long_term_monthly_av.csv"), row.names = FALSE)
+```
+
+### 5.2. CSV with coordinates
+
+#### i. Average daily values for the list of coordinates of interest
+
+```{r}
+# Create folder to store output data
+results_csv <- dir.create(file.path(user_wd, "results_csv"))
+
+# Save csv file with id for each location
+colnames(coord_df) <- c("lat", "lon")
+coord_df$id <- seq_len(nrow(coord_df))
+write.csv(coord_df, file.path(user_wd,  "results_csv", paste0("location_id.csv")), row.names = FALSE)
+
+# List all NetCDF files in the directory
+nc_files <- list.files(path = file.path(user_wd, "nc_files"), pattern = "\\.nc$", full.names = TRUE)
+
+# Iterate through each NetCDF file and each row of the coordinates data frame
+for (i in 1:nrow(coord_df)) {
+  location_output_daily <- data.frame() # Create an empty data frame to store data for each coordinate set
+  
+  for (j in 1:length(nc_files)) {
+    
+    nc <- nc_open(nc_files[j])
+    
+    nc_var <- names(nc$var)
+    units <- nc[["var"]][[nc_var]][["units"]]
+    
+    # Extract time array with the order of the two daily measurements at 00:00 and 12:00
+    day <- nc[["dim"]][["time"]][["vals"]]
+    time_df <- as.data.frame(day)
+    time_df$day <- as.POSIXct(day * 3600, origin = "1900-01-01 00:00:00", tz = "GMT")
+    time_df$day <- format(as.Date(time_df$day))
+    time_df$time_id <- seq_len(nrow(time_df))
+    
+    target_lat <- coord_df$lat[i]
+    target_lon <- coord_df$lon[i]
+    lat_nc <- nc[["dim"]][["latitude"]][["vals"]]
+    lon_nc <- nc[["dim"]][["longitude"]][["vals"]]
+
+    # Find the nearest latitude and longitude indices to the target point
+    nearest_lat_index <- which.min(abs(lat_nc - target_lat))
+    nearest_lon_index <- which.min(abs(lon_nc - target_lon))
+    
+    if (nc[["ndims"]] == 3) {
+      location_data <- ncvar_get(nc, nc_var, start = c(nearest_lon_index, nearest_lat_index, 1),
+                                 count = c(1, 1, -1))
+    } else if (nc[["ndims"]] == 4) {
+      location_data <- ncvar_get(nc, nc_var, start = c(nearest_lon_index, nearest_lat_index, 1, 1),
+                                 count = c(1, 1, 1, -1))
+    }
+    location_data <- as.vector(location_data)
+    
+    # Create location_df and merge with time_df
+    location_df <- merge(
+      data.frame(
+        time_id = seq_len(length(location_data)),
+        var = location_data
+      ),
+      time_df, by = "time_id"
+    )
+    
+    # Compute daily averages
+    location_df <- location_df %>%
+      group_by(day) %>%
+      summarise(var_avg = mean(var, na.rm = TRUE))
+    
+    # Reorder columns and rename
+    location_df <- location_df %>%
+      mutate(
+        id = coord_df$id[i],
+        lat = coord_df$lat[i],
+        long = coord_df$lon[i]
+      )
+    
+    location_df <- location_df[, c(3, 4, 5, 1, 2)]
+    colnames(location_df) <- c("Id", "Latitude", "Longitude", "Date", paste0(variable, " [", units, "]"))
+    
+    # Append to location_output_daily
+    location_output_daily <- rbind(location_output_daily, location_df)
+    
+    nc_close(nc)
+  }
+  
+  # Save the data for the current location to a CSV file
+  location_filename <- paste0("location_", i, "_output_daily.csv")
+  write.csv(location_output_daily, file.path(user_wd, "results_csv", location_filename), row.names = FALSE)
+  
+  print(paste0("Results for location ", i, " have been saved. :)"))
+}
+```
+
+#### ii. Average monthly values for the list of coordinates of interest
+
+```{r}
+output_daily <- list.files(file.path(user_wd, "results_csv"), pattern = "location_.*_output_daily.csv", full.names = TRUE)
+output_daily <- mixedsort(output_daily)  # Sort the files
+
+for (i in 1:length(output_daily)) {
+  location_data <- read.csv(output_daily[1])
+  colnames(location_data) <- c("id", "lat", "long", "day", "var")
+  
+  location_data$day <- as.Date(location_data$day, format = "%Y-%m-%d")
+  location_data$month <- format(location_data$day, "%m")
+  
+  # Compute monthly average values
+  monthly_av <- location_data %>%
+    group_by(id, lat, long, year = format(day, "%Y"), month) %>%
+    summarise(var = mean(var, na.rm = TRUE))
+  
+  # Compute long-term monthly average
+  long_term_av <- location_data %>%
+    group_by(id, lat, long, month) %>%
+    summarise(var = mean(var, na.rm = TRUE))
+  
+  # Export results as CSV files
+  common_cols <- c("Id", "Lat", "Lon")
+  colnames(monthly_av) <- c(common_cols, "Year", "Month", paste0("Monthly av ",variable," [",units,"]"))
+  colnames(long_term_av) <- c(common_cols, "Month", paste0("Long-term monthly av ",variable," [",units,"]"))
+  
+  monthly_av_filename <- paste0("location_", i, "_monthly_rate.csv")
+  long_term_filename <- paste0("location_", i, "_long_term_monthly_av.csv")
+  
+  write.csv(monthly_av, file.path(user_wd, "results_csv", monthly_av_filename), row.names = FALSE)
+  write.csv(long_term_av, file.path(user_wd, "results_csv", long_term_filename), row.names = FALSE)
+  
+  print(paste0("Results for location ", i, " have been saved. :)"))
+}
+```
