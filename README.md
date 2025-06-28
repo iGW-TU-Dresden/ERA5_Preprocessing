@@ -33,10 +33,12 @@ Once you have both R and RStudio installed on your computer, you can begin using
 - Drag the Rmd file from your file explorer and drop it onto the RStudio window.
 3. Run: Once the Rmd file is open, you can run the individual chunks of code by placing your cursor within the chunk and clicking the "Run" button in the toolbar or using the keyboard shortcut *Ctrl+Shift+Enter*.
 
-### Other contributors
+### Contributors
 
 M.Sc. Olawale Joshua Abidakun (TU Dresden)
 
-### Questions or suggestions
+M.Sc. Maria Alejandra Vela Castillo (TU Dresden)
 
-Please contact: Maria Alejandra Vela | maria_alejandra.vela_castillo1@mailbox.tu-dresden.de
+### Questions
+
+Please contact: Prof. Dr. rer. nat. Andreas Hartmann | andreas.hartmann@tu-dresden.de
