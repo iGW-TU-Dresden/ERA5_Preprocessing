@@ -154,7 +154,7 @@ The dataset will be downloaded for the assigned variable and years and stored in
 # This can found on your ERA5 account profile
 UID <- readline(prompt = "Please enter your User ID: ")
 cds.key <- readline(prompt = "Please enter your API Key: ")
-wf_set_key(user = UID, key = cds.key, service = "cds") # Log-in to the website with your details
+wf_set_key(user = UID, key = cds.key) # Log-in to the website with your details
 
 # Create folder to store the NetCDF files
 nc_files <- dir.create(file.path(user_wd, "nc_files"))
