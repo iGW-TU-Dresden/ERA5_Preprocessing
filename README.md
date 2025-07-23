@@ -39,6 +39,8 @@ M.Sc. Olawale Joshua Abidakun (TU Dresden)
 
 M.Sc. Maria Alejandra Vela Castillo (TU Dresden)
 
+B.Sc. Xinyu Zhang (Tu Dresden)
+
 ### Questions
 
-Please contact: Prof. Dr. rer. nat. Andreas Hartmann | andreas.hartmann@tu-dresden.de
+Please contact: Prof. Dr. rer. nat. Andreas Hartmann | andreas.hartmann@tu-dresden.de, B.Sc Xinyu Zhang | xinyu.zhang3@mailbox.tu-dresden.de
